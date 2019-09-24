@@ -1,4 +1,5 @@
 import numpy as np
+np.set_printoptions(suppress=True)
 import tvm
 from dlsys import autodiff, tvm_op
 
@@ -124,50 +125,53 @@ def test_matrix_multiply():
     np.testing.assert_allclose(np.dot(np.transpose(x), np.transpose(y)), z, rtol=1e-5)
 
 
+
+# im2col and np_conv2d are helper functions
+def im2col(X, filter_H, filter_W, padding, stride):
+  N, C, H, W = X.shape
+  assert (H + 2 * padding - filter_H) % stride == 0
+  assert (W + 2 * padding - filter_W) % stride == 0
+  out_H = (H + 2 * padding - filter_H) // stride + 1
+  out_W = (W + 2 * padding - filter_W) // stride + 1
+
+  y_row_size = C * filter_H * filter_W
+  y_col_size = out_H * out_W
+  y_shape = (N, y_row_size, y_col_size)
+  Y = np.empty(y_shape, dtype = X.dtype)
+
+  for batch_index in range(N):
+    for col_index in range(y_col_size):
+      out_y = col_index // out_W
+      out_x = col_index % out_W
+      in_y = out_y * stride - padding
+      in_x = out_x * stride - padding
+      row_idx = 0
+      for c in range(0, C):
+        for y in range(in_y, in_y + filter_H):
+          for x in range(in_x, in_x + filter_W):
+            if (x < 0 or x >= W or y < 0 or y >= H):
+              Y[batch_index, row_idx, col_index] = 0
+            else:
+              Y[batch_index, row_idx, col_index] = X[batch_index, c, y, x]
+            row_idx += 1
+  return Y
+
+def np_conv2d(X, Filter, padding=0, stride=1):
+    """Implement a conv2d as a matrix multiply after im2col."""
+    filter_outChannel, filter_inChannel, filter_H, filter_W = Filter.shape
+    N, C, H, W = X.shape
+    assert (H + 2 * padding - filter_H) % stride == 0
+    assert (W + 2 * padding - filter_W) % stride == 0
+    out_H = (H + 2 * padding - filter_H) // stride + 1
+    out_W = (W + 2 * padding - filter_W) // stride + 1
+
+    im2col_matrix = im2col(X, filter_H, filter_W, padding, stride)
+    filter_matrix = Filter.reshape(filter_outChannel, -1)
+    return np.matmul(filter_matrix, im2col_matrix).reshape(N, filter_outChannel, out_H, out_W)
+
+
+
 def test_conv2d():
-    # im2col and np_conv2d are helper functions
-    def im2col(X, filter_H, filter_W, padding, stride):
-      N, C, H, W = X.shape
-      assert (H + 2 * padding - filter_H) % stride == 0
-      assert (W + 2 * padding - filter_W) % stride == 0
-      out_H = (H + 2 * padding - filter_H) / stride + 1
-      out_W = (W + 2 * padding - filter_W) / stride + 1
-
-      y_row_size = C * filter_H * filter_W
-      y_col_size = out_H * out_W
-      y_shape = (N, y_row_size, y_col_size)
-      Y = np.empty(y_shape, dtype = X.dtype)
-
-      for batch_index in range(N):
-        for col_index in range(y_col_size):
-          out_y = col_index / out_W
-          out_x = col_index % out_W
-          in_y = out_y * stride - padding
-          in_x = out_x * stride - padding
-          row_idx = 0
-          for c in range(0, C):
-            for y in range(in_y, in_y + filter_H):
-              for x in range(in_x, in_x + filter_W):
-                if (x < 0 or x >= W or y < 0 or y >= H):
-                  Y[batch_index, row_idx, col_index] = 0
-                else:
-                  Y[batch_index, row_idx, col_index] = X[batch_index, c, y, x]
-                row_idx += 1
-      return Y
-
-    def np_conv2d(X, Filter, padding=0, stride=1):
-        """Implement a conv2d as a matrix multiply after im2col."""
-        filter_outChannel, filter_inChannel, filter_H, filter_W = Filter.shape
-        N, C, H, W = X.shape
-        assert (H + 2 * padding - filter_H) % stride == 0
-        assert (W + 2 * padding - filter_W) % stride == 0
-        out_H = (H + 2 * padding - filter_H) / stride + 1
-        out_W = (W + 2 * padding - filter_W) / stride + 1
-
-        im2col_matrix = im2col(X, filter_H, filter_W, padding, stride)
-        filter_matrix = Filter.reshape(filter_outChannel, -1)
-        return np.matmul(filter_matrix, im2col_matrix).reshape(N, filter_outChannel, out_H, out_W)
-
     shapeX = (100, 3, 28, 28)
     shapeF = (10, 3, 5, 5)
     shapeY = (100, 10, 24, 24)
@@ -181,7 +185,26 @@ def test_conv2d():
     conv2d = tvm_op.make_conv2d(shapeX, shapeF, tgt, tgt_host, "conv2d")
     conv2d(arr_x, arr_f, arr_y)
     y = arr_y.asnumpy()   
+
     np.testing.assert_allclose(np_conv2d(x, f), y, rtol=1e-5)
+
+def test_conv2d_small():
+    shapeX = (2, 3, 4, 4)
+    shapeF = (4, 3, 3, 3)
+    shapeY = (2, 4, 2, 2)
+    x = np.random.uniform(0, 10, size=shapeX).astype(dtype)
+    f = np.random.uniform(0, 10, size=shapeF).astype(dtype)
+    y = np.zeros(shapeY).astype(dtype)
+    arr_x = tvm.nd.array(x, ctx=ctx)
+    arr_f = tvm.nd.array(f, ctx=ctx)
+    arr_y = tvm.nd.array(y, ctx=ctx)
+   
+    conv2d = tvm_op.make_conv2d(shapeX, shapeF, tgt, tgt_host, "conv2d")
+    conv2d(arr_x, arr_f, arr_y)
+    y = arr_y.asnumpy()   
+    
+    np.testing.assert_allclose(y, np_conv2d(x, f), rtol=1e-5)
+
 
 
 def test_relu():
@@ -236,7 +259,7 @@ def test_softmax_cross_entropy():
     # numpy calculation
     cross_entropy = np.mean(
         -np.sum(y_ * np.log(autodiff.softmax_func(y)), axis=1), keepdims=True)
-    np.testing.assert_allclose(cross_entropy, out, rtol=1e-5)
+    np.testing.assert_allclose(cross_entropy, out, rtol=1e-4)
 
 
 def test_reduce_sum_axis_zero():
@@ -266,3 +289,9 @@ def test_broadcast_to():
     y = arr_y.asnumpy()
     np.testing.assert_allclose(np.broadcast_to(x, to_shape), y)
 
+
+if __name__ == '__main__':
+    pass
+    #test_conv2d()
+    #test_softmax()
+    test_softmax_cross_entropy()
