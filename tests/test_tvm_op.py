@@ -1,5 +1,5 @@
 import numpy as np
-np.set_printoptions(suppress=True)
+import timeit
 import tvm
 from dlsys import autodiff, tvm_op
 
@@ -62,6 +62,39 @@ def test_matrix_elementwise_mul_by_const():
     y = arr_y.asnumpy()
     np.testing.assert_allclose(x * const_val, y, rtol=1e-5)
 
+def test_matrix_multiply_time():
+    M = 512
+    K = 2048 
+    N = 4096
+    shapeX = (M, K)
+    shapeY = (K, N)
+    shapeZ = (M, N)
+    x = np.random.uniform(0, 10, size=shapeX).astype(dtype)
+    y = np.random.uniform(0, 10, size=shapeY).astype(dtype)
+    z = np.zeros(shapeZ).astype(dtype)
+    arr_x = tvm.nd.array(x, ctx=ctx)
+    arr_y = tvm.nd.array(y, ctx=ctx)
+    arr_z = tvm.nd.array(z, ctx=ctx)
+
+    matrix_mul = tvm_op.make_matrix_mul(shapeX, False, shapeY, False, tgt, tgt_host, "matrix_mul")
+    matrix_mul(arr_x, arr_y, arr_z)
+    z = arr_z.asnumpy()
+    np.testing.assert_allclose(np.dot(x, y), z, rtol=1e-5)
+
+    np_repeat = 100
+    np_runing_time = timeit.timeit(setup='import numpy\n'
+                       'M = ' + str(M) + '\n'
+                       'K = ' + str(K) + '\n'
+                       'N = ' + str(N) + '\n'
+                       'dtype = "float32"\n'
+                       'a = numpy.random.rand(M, K).astype(dtype)\n'
+                       'b = numpy.random.rand(K, N).astype(dtype)\n',
+                       stmt='answer = numpy.dot(a, b)',number=np_repeat)
+    print("Numpy running time: %f" % (np_runing_time / np_repeat))
+
+    evaluator = matrix_mul.time_evaluator(matrix_mul.entry_name, ctx, number=10)
+    print('Opt1: %f' % evaluator(arr_x, arr_y, arr_z).mean)
+
 
 def test_matrix_multiply():
     shapeX = (500, 700)
@@ -73,6 +106,7 @@ def test_matrix_multiply():
     arr_x = tvm.nd.array(x, ctx=ctx)
     arr_y = tvm.nd.array(y, ctx=ctx)
     arr_z = tvm.nd.array(z, ctx=ctx)
+
    
     matrix_mul = tvm_op.make_matrix_mul(shapeX, False, shapeY, False, tgt, tgt_host, "matrix_mul")
     matrix_mul(arr_x, arr_y, arr_z)
@@ -291,7 +325,10 @@ def test_broadcast_to():
 
 
 if __name__ == '__main__':
-    pass
+    #test_matrix_multiply()
+    test_matrix_multiply_time()
+    #test_relu()
+    #test_conv2d_small()
     #test_conv2d()
     #test_softmax()
-    test_softmax_cross_entropy()
+    #test_softmax_cross_entropy()

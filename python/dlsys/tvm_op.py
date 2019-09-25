@@ -4,6 +4,7 @@ import tvm
 import numpy as np
 import topi
 
+
 # Global declarations of environment.
 
 # llvm
@@ -63,6 +64,7 @@ def make_relu(shape, tgt, tgt_host, func_name, dtype="float32"):
     B = tvm.const(0, dtype=dtype)
     C = tvm.compute(shape, lambda *i: tvm.max(A(*i), B))
     s = tvm.create_schedule(C.op)
+    #print(tvm.lower(s, [A, C], simple_mode=True))
     f = tvm.build(s, [A, C], tgt, target_host=tgt_host, name=func_name)
     return f
 
@@ -79,7 +81,6 @@ def make_relu_gradient(shape, tgt, tgt_host, func_name, dtype="float32"):
     s = tvm.create_schedule(y.op)
     f = tvm.build(s, [x, x_grad, y], tgt, target_host=tgt_host, name=func_name)
     return f
-
 
 def make_matrix_mul(shapeA, transposeA, shapeB, transposeB, tgt, tgt_host,
                     func_name, dtype="float32"):
@@ -109,6 +110,17 @@ def make_matrix_mul(shapeA, transposeA, shapeB, transposeB, tgt, tgt_host,
         C = tvm.compute(shapeC, lambda x,y : tvm.sum(A[k,x] * B[y, k], axis=k), name='C')
 
     s = tvm.create_schedule(C.op)
+
+    block_size = 32
+    xo, yo, xi, yi = s[C].tile(C.op.axis[0], C.op.axis[1], block_size, block_size)
+
+    k, = s[C].op.reduce_axis
+    ko, ki = s[C].split(k, factor=4)
+    s[C].reorder(xo, yo, ko, xi, ki, yi)
+
+    # parallel
+    s[C].parallel(xo)
+
     f = tvm.build(s, [A, B, C], tgt, target_host=tgt_host, name=func_name)
     return f
 
@@ -117,7 +129,6 @@ def make_conv2d(shapeX, shapeF, tgt, tgt_host, func_name, dtype="float32", paddi
     assert(shapeX[1] == shapeF[1])
     N, C, H, W = shapeX
     out_c, C, filter_H, filter_W = shapeF
-
 
 
     """TODO: Your code here"""
@@ -140,6 +151,7 @@ def make_conv2d(shapeX, shapeF, tgt, tgt_host, func_name, dtype="float32", paddi
 
     y = tvm.compute(out_shape, lambda n,m,h,w: tvm.sum(x[n, c, h+k_row, w+k_col] * feat[m, c, k_row, k_col], axis=[k_row, k_col, c]), name='Y')
     s = tvm.create_schedule(y.op)
+    #print(tvm.lower(s, [x, feat, y], simple_mode=True))
     f = tvm.build(s, [x, feat, y], tgt, target_host=tgt_host, name=func_name)
     return f
 
